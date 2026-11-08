@@ -1,0 +1,22 @@
+[Unit]
+Description=Rust WebRCON Prometheus exporter
+After=network.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/opt/rust-rcon-exporter
+EnvironmentFile=/etc/rust-rcon-exporter.env
+ExecStart=/opt/rust-rcon-exporter/.venv/bin/rust-rcon-exporter
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,24 @@
+# Local secrets and configuration
+.env
+.env.*
+!.env.example
+*.log
+
+# Python environments, caches, and build artifacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
