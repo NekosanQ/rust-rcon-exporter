@@ -30,7 +30,7 @@ SERVERINFO = {
 
 def samples(payload):
     return {
-        (sample.name, sample.labels.get("field")): sample.value
+        sample.name: sample.value
         for family in text_string_to_metric_families(payload.decode())
         for sample in family.samples
     }
@@ -44,27 +44,39 @@ class ExporterTests(unittest.TestCase):
         self.assertEqual(
             samples(main.to_metrics(SERVERINFO)),
             {
-                ("rcon_up", None): 1,
-                ("rcon_poll_failures_total", None): 0,
-                **{
-                    ("rust_serverinfo", field): value
-                    for field, value in SERVERINFO.items()
-                },
+                "rcon_up": 1,
+                "rcon_poll_failures_total": 0,
+                "rust_server_fps": 59.5,
+                "rust_server_players": 3,
+                "rust_server_entity_count": 1234,
+                "rust_server_memory": 123.5,
+                "rust_server_collections": 42,
+                "rust_server_network_in": 100,
+                "rust_server_network_out": 200,
             },
         )
         types = {family.name: family.type for family in families}
-        self.assertEqual(types["rust_serverinfo"], "gauge")
+        self.assertTrue(
+            all(
+                kind == "gauge"
+                for name, kind in types.items()
+                if name.startswith("rust_server_")
+            )
+        )
+        self.assertTrue(
+            all(not sample.labels for family in families for sample in family.samples)
+        )
         self.assertEqual(types["rcon_poll_failures"], "counter")
         self.assertEqual(
             samples(main.to_metrics(None)),
-            {("rcon_up", None): 0, ("rcon_poll_failures_total", None): 0},
+            {"rcon_up": 0, "rcon_poll_failures_total": 0},
         )
 
     def test_invalid_values_are_omitted(self):
         for value in (None, "60", float("nan"), float("inf"), 10**400, [], {}):
             with self.subTest(value=str(value)[:20]):
                 output = samples(main.to_metrics({**SERVERINFO, "Invalid": value}))
-                self.assertNotIn(("rust_serverinfo", "Invalid"), output)
+                self.assertNotIn("rust_server_invalid", output)
         for data in ({}, {"Hostname": "text"}, [], "not an object"):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 main.to_metrics(data)
@@ -72,13 +84,67 @@ class ExporterTests(unittest.TestCase):
     def test_unknown_fields_booleans_and_negative_numbers(self):
         data = {"NewField": 123, "Restarting": True, "Saving": False, "Seed": -1}
         output = samples(main.to_metrics(data))
-        for field, value in data.items():
-            self.assertEqual(output[("rust_serverinfo", field)], value)
+        self.assertEqual(
+            output,
+            {
+                "rcon_up": 1,
+                "rcon_poll_failures_total": 0,
+                "rust_server_new_field": 123,
+                "rust_server_restarting": 1,
+                "rust_server_saving": 0,
+                "rust_server_seed": -1,
+            },
+        )
 
-    def test_field_labels_are_escaped(self):
+    def test_field_names_are_sanitized(self):
         field = 'field"with\\special\ncharacters'
         output = samples(main.to_metrics({field: 1}))
-        self.assertEqual(output[("rust_serverinfo", field)], 1)
+        self.assertEqual(output["rust_server_field_with_special_characters"], 1)
+        output = samples(main.to_metrics({"CPUUsage": 2, "123Stat": 3}))
+        self.assertEqual(output["rust_server_cpu_usage"], 2)
+        self.assertEqual(output["rust_server_123_stat"], 3)
+
+    def test_collisions_preserve_all_fields_and_names_across_polls(self):
+        with patch.dict(
+            main.METRIC_NAMES, {"Framerate": "rust_server_fps"}, clear=True
+        ):
+            data = {"Framerate": 60, "FPS": 1, "FooBar": 2, "foo-bar": 3, "FooBar2": 4}
+            first = samples(main.to_metrics(data))
+            self.assertEqual(first["rust_server_fps"], 60)
+            self.assertEqual(first["rust_server_fps_2"], 1)
+            self.assertEqual(first["rust_server_foo_bar"], 2)
+            self.assertEqual(first["rust_server_foo_bar_2"], 3)
+            self.assertEqual(first["rust_server_foo_bar2"], 4)
+            self.assertEqual(len(first), len(data) + 2)
+            self.assertEqual(
+                samples(main.to_metrics(dict(reversed(list(data.items()))))), first
+            )
+            missing = samples(main.to_metrics({"foo-bar": 30}))
+            self.assertEqual(missing["rust_server_foo_bar_2"], 30)
+            self.assertNotIn("rust_server_foo_bar", missing)
+            self.assertEqual(samples(main.to_metrics(data)), first)
+
+    def test_sanitized_name_collisions_do_not_create_duplicate_samples(self):
+        with patch.dict(
+            main.METRIC_NAMES, {"Framerate": "rust_server_fps"}, clear=True
+        ):
+            data = {
+                "": 1,
+                "---": 2,
+                "field": 3,
+                "FooBar": 4,
+                "foo_bar": 5,
+                "foo_bar_2": 6,
+            }
+            payload = main.to_metrics(data)
+            parsed = [
+                sample
+                for family in text_string_to_metric_families(payload.decode())
+                for sample in family.samples
+            ]
+            names = [sample.name for sample in parsed]
+            self.assertEqual(len(names), len(set(names)))
+            self.assertEqual(len(names), len(data) + 2)
 
     def test_failure_keeps_timestamp_and_counter(self):
         timestamp = 1794182400.123456
@@ -86,14 +152,14 @@ class ExporterTests(unittest.TestCase):
         self.assertEqual(
             output,
             {
-                ("rcon_up", None): 0,
-                ("rcon_poll_failures_total", None): 2,
-                ("rcon_last_success_timestamp_seconds", None): timestamp,
+                "rcon_up": 0,
+                "rcon_poll_failures_total": 2,
+                "rcon_last_success_timestamp_seconds": timestamp,
             },
         )
         output = samples(main.to_metrics(SERVERINFO, 0.125, timestamp, 2))
-        self.assertEqual(output[("rcon_response_seconds", None)], 0.125)
-        self.assertEqual(output[("rcon_poll_failures_total", None)], 2)
+        self.assertEqual(output["rcon_response_seconds"], 0.125)
+        self.assertEqual(output["rcon_poll_failures_total"], 2)
 
     def test_settings_and_password_encoding(self):
         with patch.dict(
@@ -205,26 +271,26 @@ class ExporterTests(unittest.TestCase):
             )
             try:
                 success = samples(wait_for("rcon_up 1\n").encode())
-                self.assertEqual(success[("rust_serverinfo", "Memory")], 123.5)
-                self.assertGreaterEqual(success[("rcon_response_seconds", None)], 0)
-                last_success = success[("rcon_last_success_timestamp_seconds", None)]
+                self.assertEqual(success["rust_server_memory"], 123.5)
+                self.assertGreaterEqual(success["rcon_response_seconds"], 0)
+                last_success = success["rcon_last_success_timestamp_seconds"]
                 self.assertEqual(scrape("/")[0], 404)
                 invalid.set()
                 failure = samples(wait_for("rcon_up 0\n").encode())
                 self.assertFalse(
-                    any(name == "rust_serverinfo" for name, field in failure)
+                    any(name.startswith("rust_server_") for name in failure)
                 )
-                self.assertNotIn(("rcon_response_seconds", None), failure)
+                self.assertNotIn("rcon_response_seconds", failure)
                 self.assertEqual(
-                    failure[("rcon_last_success_timestamp_seconds", None)], last_success
+                    failure["rcon_last_success_timestamp_seconds"], last_success
                 )
-                self.assertEqual(failure[("rcon_poll_failures_total", None)], 1)
+                self.assertEqual(failure["rcon_poll_failures_total"], 1)
                 invalid.clear()
                 recovered = samples(wait_for("rcon_up 1\n").encode())
-                self.assertEqual(recovered[("rust_serverinfo", "Framerate")], 59.5)
-                self.assertEqual(recovered[("rcon_poll_failures_total", None)], 1)
+                self.assertEqual(recovered["rust_server_fps"], 59.5)
+                self.assertEqual(recovered["rcon_poll_failures_total"], 1)
                 self.assertGreater(
-                    recovered[("rcon_last_success_timestamp_seconds", None)],
+                    recovered["rcon_last_success_timestamp_seconds"],
                     last_success,
                 )
                 self.assertTrue(

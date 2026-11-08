@@ -4,6 +4,7 @@
 import json
 import math
 import os
+import re
 import signal
 import socket
 import sys
@@ -16,11 +17,28 @@ from urllib.parse import quote, urlsplit
 import websocket
 
 TIMEOUT = 6
+METRIC_NAMES = {"Framerate": "rust_server_fps"}
+
+
+def metric_name(field):
+    """Generate readable names and retain collision assignments across polls."""
+    if field not in METRIC_NAMES:
+        name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", field)
+        name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+        name = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower() or "field"
+        base = f"rust_server_{name}"
+        name = base
+        suffix = 2
+        while name in METRIC_NAMES.values():
+            name = f"{base}_{suffix}"
+            suffix += 1
+        METRIC_NAMES[field] = name
+    return METRIC_NAMES[field]
 
 
 def to_metrics(data, response_seconds=None, last_success=None, failures=0):
     """Expose every finite numeric/boolean serverinfo field without assuming units."""
-    fields = []
+    fields = {}
     if data is not None:
         if not isinstance(data, dict):
             raise ValueError("serverinfo must be a JSON object")
@@ -32,10 +50,7 @@ def to_metrics(data, response_seconds=None, last_success=None, failures=0):
             except OverflowError:
                 continue
             if math.isfinite(number):
-                label = (
-                    field.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                )
-                fields.append(f'rust_serverinfo{{field="{label}"}} {number:.17g}')
+                fields[metric_name(field)] = number
         if not fields:
             raise ValueError("serverinfo contains no numeric fields")
 
@@ -44,12 +59,11 @@ def to_metrics(data, response_seconds=None, last_success=None, failures=0):
         values["rcon_response_seconds"] = response_seconds
     if last_success is not None:
         values["rcon_last_success_timestamp_seconds"] = last_success
+    values.update(fields)
     lines = []
     for name, value in values.items():
         kind = "counter" if name == "rcon_poll_failures_total" else "gauge"
         lines.extend((f"# TYPE {name} {kind}", f"{name} {value:.17g}"))
-    if fields:
-        lines.extend(("# TYPE rust_serverinfo gauge", *fields))
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
