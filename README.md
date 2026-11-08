@@ -19,16 +19,21 @@ requirements-dev.txt  テスト・コード確認用の依存
 
 ## 起動
 
-Linux の Docker Engine と Docker Compose 2.30.0 以上を使用します。
+Linux の Docker Engine と Docker Compose v2 以上を使用します。
 Rust 側で WebRCON（`rcon.web 1`）を有効にしてください。
 
 ```sh
-cp .env.example exporter.env
-chmod 600 exporter.env
+cp .env.example .env
+chmod 600 .env
 ```
 
-`exporter.env` の `RCON_PASSWORD` と `RCON_PORT` を実際の値に変更して起動します。
-値はそのまま渡すため、パスワードを引用符で囲む必要はありません。
+`.env` の `RCON_PASSWORD` と `RCON_PORT` を実際の値に変更して起動します。
+パスワードはシングルクォートで囲むと、`$`・`#`・空白をそのまま扱えます。
+パスワード中の `'` は `\'` と記述してください。囲みの引用符はパスワードに含まれません。
+
+```dotenv
+RCON_PASSWORD='your-password$with#symbols'
+```
 
 ```sh
 docker compose up -d --build
@@ -58,7 +63,7 @@ docker compose down
 | `METRICS_PORT` | `9187` | HTTP ポート（1024〜65535） |
 
 設定ファイルは Docker Compose が環境変数として渡します。
-実際のパスワードを含む `exporter.env` は Git に追加しないでください。
+実際のパスワードを含む `.env` は Git に追加しないでください。
 
 ## 出力
 
@@ -90,7 +95,7 @@ scrape_configs:
 ## Python で直接実行
 
 Python 3.10 以上でも実行できます。環境変数を設定して起動してください。
-Python 自体は `exporter.env` を読み込みません。
+Python 自体は `.env` を読み込みません。
 
 ```sh
 python -m pip install -r requirements.txt

@@ -2,7 +2,5 @@ services:
   exporter:
     build: .
     network_mode: host
-    env_file:
-      - path: ./exporter.env
-        format: raw
+    env_file: .env
     restart: unless-stopped
