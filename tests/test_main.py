@@ -17,7 +17,23 @@ from websockets.sync.server import serve
 
 import main
 
-SERVERINFO = {"Framerate": 59.5, "Players": 3, "EntityCount": 1234}
+SERVERINFO = {
+    "Framerate": 59.5,
+    "Players": 3,
+    "EntityCount": 1234,
+    "Memory": 123.5,
+    "Collections": 42,
+    "NetworkIn": 100,
+    "NetworkOut": 200,
+}
+
+
+def samples(payload):
+    return {
+        (sample.name, sample.labels.get("field")): sample.value
+        for family in text_string_to_metric_families(payload.decode())
+        for sample in family.samples
+    }
 
 
 class ExporterTests(unittest.TestCase):
@@ -25,36 +41,59 @@ class ExporterTests(unittest.TestCase):
         families = list(
             text_string_to_metric_families(main.to_metrics(SERVERINFO).decode())
         )
-        samples = {
-            sample.name: sample.value
-            for family in families
-            for sample in family.samples
-        }
         self.assertEqual(
-            samples,
+            samples(main.to_metrics(SERVERINFO)),
             {
-                "rcon_up": 1,
-                "server_fps": 59.5,
-                "players_online": 3,
-                "entities_total": 1234,
+                ("rcon_up", None): 1,
+                ("rcon_poll_failures_total", None): 0,
+                **{
+                    ("rust_serverinfo", field): value
+                    for field, value in SERVERINFO.items()
+                },
             },
         )
-        self.assertTrue(all(family.type == "gauge" for family in families))
-        self.assertEqual(main.to_metrics(None), b"# TYPE rcon_up gauge\nrcon_up 0\n")
+        types = {family.name: family.type for family in families}
+        self.assertEqual(types["rust_serverinfo"], "gauge")
+        self.assertEqual(types["rcon_poll_failures"], "counter")
+        self.assertEqual(
+            samples(main.to_metrics(None)),
+            {("rcon_up", None): 0, ("rcon_poll_failures_total", None): 0},
+        )
 
-    def test_invalid_required_values_are_rejected(self):
-        for field in SERVERINFO:
-            for value in (None, True, "60", -1, float("nan"), float("inf"), 10**400):
-                with (
-                    self.subTest(field=field, value=str(value)[:20]),
-                    self.assertRaises(ValueError),
-                ):
-                    main.to_metrics({**SERVERINFO, field: value})
+    def test_invalid_values_are_omitted(self):
+        for value in (None, "60", float("nan"), float("inf"), 10**400, [], {}):
+            with self.subTest(value=str(value)[:20]):
+                output = samples(main.to_metrics({**SERVERINFO, "Invalid": value}))
+                self.assertNotIn(("rust_serverinfo", "Invalid"), output)
+        for data in ({}, {"Hostname": "text"}, [], "not an object"):
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                main.to_metrics(data)
 
-    def test_optional_fields(self):
-        output = main.to_metrics({**SERVERINFO, "Queued": 0, "Joining": "invalid"})
-        self.assertIn(b"players_queued 0\n", output)
-        self.assertNotIn(b"players_joining", output)
+    def test_unknown_fields_booleans_and_negative_numbers(self):
+        data = {"NewField": 123, "Restarting": True, "Saving": False, "Seed": -1}
+        output = samples(main.to_metrics(data))
+        for field, value in data.items():
+            self.assertEqual(output[("rust_serverinfo", field)], value)
+
+    def test_field_labels_are_escaped(self):
+        field = 'field"with\\special\ncharacters'
+        output = samples(main.to_metrics({field: 1}))
+        self.assertEqual(output[("rust_serverinfo", field)], 1)
+
+    def test_failure_keeps_timestamp_and_counter(self):
+        timestamp = 1794182400.123456
+        output = samples(main.to_metrics(None, last_success=timestamp, failures=2))
+        self.assertEqual(
+            output,
+            {
+                ("rcon_up", None): 0,
+                ("rcon_poll_failures_total", None): 2,
+                ("rcon_last_success_timestamp_seconds", None): timestamp,
+            },
+        )
+        output = samples(main.to_metrics(SERVERINFO, 0.125, timestamp, 2))
+        self.assertEqual(output[("rcon_response_seconds", None)], 0.125)
+        self.assertEqual(output[("rcon_poll_failures_total", None)], 2)
 
     def test_settings_and_password_encoding(self):
         with patch.dict(
@@ -165,12 +204,29 @@ class ExporterTests(unittest.TestCase):
                 text=True,
             )
             try:
-                self.assertIn("players_online 3\n", wait_for("rcon_up 1\n"))
+                success = samples(wait_for("rcon_up 1\n").encode())
+                self.assertEqual(success[("rust_serverinfo", "Memory")], 123.5)
+                self.assertGreaterEqual(success[("rcon_response_seconds", None)], 0)
+                last_success = success[("rcon_last_success_timestamp_seconds", None)]
                 self.assertEqual(scrape("/")[0], 404)
                 invalid.set()
-                self.assertNotIn("server_fps", wait_for("rcon_up 0\n"))
+                failure = samples(wait_for("rcon_up 0\n").encode())
+                self.assertFalse(
+                    any(name == "rust_serverinfo" for name, field in failure)
+                )
+                self.assertNotIn(("rcon_response_seconds", None), failure)
+                self.assertEqual(
+                    failure[("rcon_last_success_timestamp_seconds", None)], last_success
+                )
+                self.assertEqual(failure[("rcon_poll_failures_total", None)], 1)
                 invalid.clear()
-                self.assertIn("server_fps 59.5\n", wait_for("rcon_up 1\n"))
+                recovered = samples(wait_for("rcon_up 1\n").encode())
+                self.assertEqual(recovered[("rust_serverinfo", "Framerate")], 59.5)
+                self.assertEqual(recovered[("rcon_poll_failures_total", None)], 1)
+                self.assertGreater(
+                    recovered[("rcon_last_success_timestamp_seconds", None)],
+                    last_success,
+                )
                 self.assertTrue(
                     all(request["Message"] == "serverinfo" for request in requests)
                 )

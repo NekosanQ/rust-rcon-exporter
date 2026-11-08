@@ -15,38 +15,42 @@ from urllib.parse import quote, urlsplit
 
 import websocket
 
-FIELDS = {
-    "Framerate": "server_fps",
-    "Players": "players_online",
-    "EntityCount": "entities_total",
-    "Queued": "players_queued",
-    "Joining": "players_joining",
-    "MaxPlayers": "players_capacity",
-    "Uptime": "server_uptime_seconds",
-}
-REQUIRED_FIELDS = {"Framerate", "Players", "EntityCount"}
 TIMEOUT = 6
 
 
-def to_metrics(data):
-    """Convert serverinfo fields to gauges; a failed poll exposes only rcon_up."""
-    values = {"rcon_up": int(data is not None)}
+def to_metrics(data, response_seconds=None, last_success=None, failures=0):
+    """Expose every finite numeric/boolean serverinfo field without assuming units."""
+    fields = []
     if data is not None:
         if not isinstance(data, dict):
             raise ValueError("serverinfo must be a JSON object")
-        for field, name in FIELDS.items():
-            value = data.get(field)
+        for field, value in data.items():
+            if not isinstance(value, (int, float)):
+                continue
             try:
-                number = float(value) if type(value) in (int, float) else -1
+                number = float(value)
             except OverflowError:
-                number = -1
-            if math.isfinite(number) and number >= 0:
-                values[name] = number
-            elif field in REQUIRED_FIELDS:
-                raise ValueError(f"Missing or invalid serverinfo field: {field}")
-    return "".join(
-        f"# TYPE {name} gauge\n{name} {value:.17g}\n" for name, value in values.items()
-    ).encode("utf-8")
+                continue
+            if math.isfinite(number):
+                label = (
+                    field.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+                )
+                fields.append(f'rust_serverinfo{{field="{label}"}} {number:.17g}')
+        if not fields:
+            raise ValueError("serverinfo contains no numeric fields")
+
+    values = {"rcon_up": int(data is not None), "rcon_poll_failures_total": failures}
+    if response_seconds is not None:
+        values["rcon_response_seconds"] = response_seconds
+    if last_success is not None:
+        values["rcon_last_success_timestamp_seconds"] = last_success
+    lines = []
+    for name, value in values.items():
+        kind = "counter" if name == "rcon_poll_failures_total" else "gauge"
+        lines.extend((f"# TYPE {name} {kind}", f"{name} {value:.17g}"))
+    if fields:
+        lines.extend(("# TYPE rust_serverinfo gauge", *fields))
+    return ("\n".join(lines) + "\n").encode("utf-8")
 
 
 class MetricsHandler(BaseHTTPRequestHandler):
@@ -115,16 +119,27 @@ def request_serverinfo(ws, identifier):
 
 def poll(url, interval, stopping):
     identifier = 0
+    failures = 0
+    last_success = None
     while not stopping.is_set():
         ws = None
         try:
             ws = connect(url)
             while not stopping.is_set():
                 identifier += 1
-                MetricsHandler.payload = to_metrics(request_serverinfo(ws, identifier))
+                started = time.monotonic()
+                data = request_serverinfo(ws, identifier)
+                response_seconds = time.monotonic() - started
+                success_time = time.time()
+                payload = to_metrics(data, response_seconds, success_time, failures)
+                last_success = success_time
+                MetricsHandler.payload = payload
                 stopping.wait(interval)
         except (OSError, ValueError, websocket.WebSocketException) as exc:
-            MetricsHandler.payload = to_metrics(None)
+            failures += 1
+            MetricsHandler.payload = to_metrics(
+                None, last_success=last_success, failures=failures
+            )
             # Never print the exception text: it can contain the password or URL.
             print(f"RCON poll failed ({type(exc).__name__})", file=sys.stderr)
         finally:
