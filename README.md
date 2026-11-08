@@ -4,6 +4,8 @@ A small, loopback-only Prometheus exporter for Rust Dedicated Server WebRCON.
 
 Rust Dedicated Server の WebRCON に接続し、読み取りコマンド `serverinfo` の結果を
 Prometheus 形式で公開します。Carbon・Oxide などのサーバープラグインは不要です。
+Docker Compose で exporter だけを独立して起動できます。コンテナ内では Python の
+1 プロセスで動作し、データベースや永続ボリュームを必要としません。
 
 ## 特徴
 
@@ -16,16 +18,82 @@ Prometheus 形式で公開します。Carbon・Oxide などのサーバープラ
 
 ## 必要条件
 
-- Python 3.10 以上
+- Linux 上の Docker Engine と Docker Compose 2.30.0 以上
 - WebRCON を有効にした Rust Dedicated Server（`rcon.web 1`）
-- exporter と Rust サーバーを同じホスト・ネットワーク名前空間で実行すること
+- Docker ホストのループバックから Rust サーバーの WebRCON に接続できること
 - メトリクスを保存する場合は Prometheus
+
+Docker 運用ではホストへの Python 導入は不要です。Python で直接実行する場合は 3.10 以上が必要です。
 
 Rust サーバー側の `rcon.port` と `rcon.password` に合わせて設定してください。
 WebRCON には管理者権限があるため、RCON 自体の公開範囲もファイアウォールなどで
 制限してください。この exporter が Rust サーバー側の待受設定を変更することはありません。
 
-## インストール
+## Docker での起動（標準の運用方法）
+
+```sh
+git clone https://github.com/NekosanQ/rust-rcon-exporter.git
+cd rust-rcon-exporter
+cp .env.example exporter.env
+chmod 600 exporter.env
+```
+
+`exporter.env` を編集し、`RCON_PASSWORD` と `RCON_PORT` を実際の値に変更します。
+値を囲む引用符は不要です。`$`、`#`、引用符なども値としてそのまま渡します。
+このファイルは Git と Docker のビルド対象から除外しています。
+
+```sh
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=50 exporter
+curl http://127.0.0.1:9187/metrics
+```
+
+[`compose.yaml`](compose.yaml) が起動するサービスは exporter のみです。
+Prometheus は利用したい場合に別途用意してください。
+初回ビルドにはベースイメージと Python パッケージを取得するためのインターネット接続が必要です。
+
+### ネットワーク
+
+Linux の [`host` ネットワーク](https://docs.docker.com/engine/network/drivers/host/) を使い、
+ホスト上の WebRCON と `127.0.0.1:9187/metrics` をそのまま利用します。
+HTTP はループバックでのみ待ち受けます。`ports` や `-p` によるポート転送は使用しません。
+Rust が別コンテナの場合は、その WebRCON をホストのループバックへ公開する構成が必要です。
+
+この Compose 構成の運用対象は Linux の Docker Engine です。
+Docker Desktop はホストネットワークの有効化やネットワーク動作に違いがあるため、
+Windows/macOS では後述の Python による直接実行も利用できます。
+
+### 更新・停止
+
+```sh
+# ソースとベースイメージを更新して再作成
+git pull --ff-only
+docker compose build --pull
+docker compose up -d
+
+# exporter.env の変更を反映
+docker compose up -d --force-recreate
+
+# 停止（コンテナは残す）
+docker compose stop
+
+# 停止してコンテナを削除
+docker compose down
+```
+
+`restart: unless-stopped` により、プロセスの異常終了や Docker 再起動後に起動します。
+手動で停止したコンテナは停止状態を維持します。終了時は最大 15 秒待機してから強制終了します。
+状態はメモリ上にだけ保持するため、再作成時には初回取得前の状態に戻ります。
+
+コンテナは非 root、読み取り専用ファイルシステムで動作し、ログはローテーションします。
+ヘルスチェックは `/metrics` の HTTP 応答だけを確認します。RCON 障害時も exporter は
+`healthy` のまま再接続し、RCON の状態は `rcon_up` で確認できます。
+ヘルスチェックが `unhealthy` になっただけでは Docker は自動再起動しません。
+
+## Python で直接実行する場合
+
+### インストール
 
 ```sh
 git clone https://github.com/NekosanQ/rust-rcon-exporter.git
@@ -47,7 +115,7 @@ python -m venv .venv
 実行時の外部依存は [`websocket-client`](https://pypi.org/project/websocket-client/)
 のみです。互換用に `python -m pip install -r requirements.txt` も利用できます。
 
-## 起動
+### 起動
 
 Linux/macOS（仮想環境を有効にしたシェル）:
 
@@ -57,7 +125,7 @@ export RCON_PASSWORD
 rust-rcon-exporter
 ```
 
-上のパスワード入力例は Bash 用です。継続運用には後述の systemd 設定例を利用できます。
+上のパスワード入力例は Bash 用です。
 
 Windows PowerShell:
 
@@ -83,8 +151,13 @@ RCON の通信エラーはプロセスを終了させず再試行します。
 
 ## 設定
 
-すべて環境変数で指定します。`.env` ファイルの自動読み込みは行いません。
+すべて環境変数で指定します。Docker Compose は `exporter.env` を読み込み、コンテナに渡します。
+Python アプリケーション自体は設定ファイルを自動で読み込みません。
 [`.env.example`](.env.example) は設定内容の見本で、実際の認証情報を含みません。
+
+Compose の [`env_file: format: raw`](https://docs.docker.com/reference/compose-file/services/#format)
+を使うため、値は変数展開されません。`exporter.env` はシェルスクリプトではないため、
+`export` を付けたり、`source exporter.env` で読み込んだりしないでください。
 
 | 環境変数 | デフォルト | 内容 |
 | --- | --- | --- |
@@ -155,41 +228,13 @@ Prometheus が別ホストや別コンテナにある場合、その `127.0.0.1`
 コンテナ運用ではネットワーク名前空間を合わせるか、ローカルのメトリクス収集エージェントから
 転送する構成が必要です。本プロジェクトには外部待受・認証・TLS の機能はありません。
 
-## systemd での運用例（Linux）
-
-以下は `/opt/rust-rcon-exporter` に配置する場合の例です。コマンドはリポジトリ直下から実行します。
-Python の `venv` が使えることを確認してください（Debian/Ubuntu では `python3-venv` が必要な場合があります）。
-
-```sh
-sudo install -d -m 755 /opt/rust-rcon-exporter
-sudo python3 -m venv /opt/rust-rcon-exporter/.venv
-sudo /opt/rust-rcon-exporter/.venv/bin/python -m pip install .
-sudo install -m 600 .env.example /etc/rust-rcon-exporter.env
-sudoedit /etc/rust-rcon-exporter.env
-sudo install -m 644 examples/rust-rcon-exporter.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now rust-rcon-exporter
-```
-
-環境ファイルのパスワード・RCON ポートを実際の値に変更してから起動してください。
-特殊文字を含む値は systemd の
-[`EnvironmentFile` の構文](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#EnvironmentFile=)
-に従って引用します。
-
-```sh
-sudo systemctl status rust-rcon-exporter
-sudo journalctl -u rust-rcon-exporter -n 50 --no-pager
-```
-
-[サービス定義](examples/rust-rcon-exporter.service) は `DynamicUser` とファイルシステム保護を使用します。
-仮想環境を含む `/opt/rust-rcon-exporter` はサービスから読み取り・実行できる必要があります。
-`/home` 配下の仮想環境を参照する構成には書き換えないでください。
-環境ファイルを変更したら `sudo systemctl restart rust-rcon-exporter` で反映します。
-
 ## トラブルシューティング
 
 | 症状 | 確認箇所 |
 | --- | --- |
+| `exporter.env` が見つからない | `.env.example` からコピーして設定したか |
+| Compose が `format` を認識しない | Docker Compose が 2.30.0 以上か |
+| コンテナが `unhealthy` | `docker compose logs --tail=50 exporter` と HTTP ポートの競合 |
 | `Configuration error` | 必須パスワード、ローカルホスト制限、各設定の数値範囲 |
 | `Missing websocket-client dependency` | 実行する Python の仮想環境に `python -m pip install .` でインストールしたか |
 | `Cannot run exporter` | HTTP ポートの重複、OS の待受制限 |
@@ -217,6 +262,17 @@ python -m build
 CI では Linux/Windows と Python 3.10/3.14 の組み合わせで実行します。
 疑似サーバーの検証と実際の Rust サーバーでの互換性確認は別です。
 
+Linux の Docker Engine がある場合は、実際の Compose 構成で通信・再接続・
+ヘルスチェック・停止を確認できます。テスト用のポートと一時設定ファイルを使い、
+実サーバーの認証情報を必要としません。テスト後はコンテナを削除します。
+
+```sh
+docker build -t rust-rcon-exporter:local .
+RUST_RCON_TEST_IMAGE=rust-rcon-exporter:local python -m unittest discover -s tests -p test_docker.py -v
+```
+
+通常のテストでは Docker テストをスキップし、CI の Linux Docker ジョブで実行します。
+
 ```text
 rust_rcon_exporter/
   config.py   環境変数の読み込みと検証
@@ -224,7 +280,9 @@ rust_rcon_exporter/
   rcon.py     WebRCON の接続・取得・再試行
   http.py     /metrics の応答
   cli.py      CLI と起動・終了処理
-examples/     Prometheus と systemd の設定例
+Dockerfile    Python と実行時の依存を含むイメージ
+compose.yaml  exporter 1 コンテナの運用設定
+examples/     Prometheus の設定例
 tests/        単体テストと疑似 WebRCON の結合テスト
 ```
 
