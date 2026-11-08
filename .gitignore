@@ -5,18 +5,12 @@
 exporter.env
 *.log
 
-# Python environments, caches, and build artifacts
+# Python environments and caches
 .venv/
 venv/
 __pycache__/
 *.py[cod]
-*.egg-info/
-build/
-dist/
 .ruff_cache/
-.pytest_cache/
-.coverage
-htmlcov/
 
 # Editors and operating systems
 .idea/
