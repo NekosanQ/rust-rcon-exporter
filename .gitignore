@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+exporter.env
 *.log
 
 # Python environments, caches, and build artifacts

@@ -1,0 +1,20 @@
+services:
+  exporter:
+    build: .
+    image: rust-rcon-exporter:local
+    network_mode: host
+    env_file:
+      - path: ./exporter.env
+        format: raw
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

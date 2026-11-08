@@ -1,2 +1,2 @@
-include .env.example main.py requirements.txt
-recursive-include examples *.yml *.service
+include .env.example .dockerignore Dockerfile compose.yaml main.py requirements.txt
+recursive-include examples *.yml
