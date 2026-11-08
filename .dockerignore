@@ -1,9 +1,4 @@
-# Only application sources and package metadata belong in the build context.
 **
 !Dockerfile
-!pyproject.toml
-!README.md
-!LICENSE
-!rust_rcon_exporter/
-rust_rcon_exporter/**
-!rust_rcon_exporter/*.py
+!requirements.txt
+!main.py

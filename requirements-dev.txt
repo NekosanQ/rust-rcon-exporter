@@ -1,0 +1,4 @@
+-r requirements.txt
+prometheus-client>=0.21,<1
+websockets>=15,<17
+ruff>=0.9,<1

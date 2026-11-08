@@ -1,2 +1,1 @@
-# Compatibility with: python -m pip install -r requirements.txt
-.
+websocket-client>=1.9.2,<2
