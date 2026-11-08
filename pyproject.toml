@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rust-rcon-exporter"
+version = "0.1.0"
+description = "Loopback-only Rust Dedicated Server WebRCON exporter for Prometheus"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["websocket-client>=1.9.2,<2"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Monitoring",
+]
+
+[project.urls]
+Repository = "https://github.com/NekosanQ/rust-rcon-exporter"
+Issues = "https://github.com/NekosanQ/rust-rcon-exporter/issues"
+
+[project.scripts]
+rust-rcon-exporter = "rust_rcon_exporter.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2,<2",
+    "prometheus-client>=0.21,<1",
+    "ruff>=0.9,<1",
+    "websockets>=15,<17",
+]
+
+[tool.setuptools.packages.find]
+include = ["rust_rcon_exporter*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
