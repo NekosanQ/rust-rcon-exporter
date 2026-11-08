@@ -68,25 +68,36 @@ docker compose down
 
 ## 出力
 
-`serverinfo` の直下にある数値・真偽値を `rust_serverinfo{field="項目名"}` の Gauge として出力します。
-項目の固定リストはなく、サーバー側で数値項目が追加された場合も自動で出力します。
+`serverinfo` の直下にある数値・真偽値を、項目ごとの `rust_server_*` Gauge として出力します。
+項目の固定リストはなく、新しい数値項目も自動で出力します。
+名前は `NetworkIn → rust_server_network_in` のように自動変換します。
+`Framerate` は使いやすい `rust_server_fps` にしています。
 真偽値は `true=1`、`false=0` に変換します。文字列・配列・オブジェクト・null・非有限数は出力しません。
 
 出力例（項目と値はサーバーによって異なります）:
 
 ```prometheus
-# TYPE rust_serverinfo gauge
-rust_serverinfo{field="Framerate"} 60
-rust_serverinfo{field="Players"} 3
-rust_serverinfo{field="Memory"} 123.5
-rust_serverinfo{field="Collections"} 42
-rust_serverinfo{field="NetworkIn"} 100
-rust_serverinfo{field="NetworkOut"} 200
+# TYPE rust_server_fps gauge
+rust_server_fps 60
+# TYPE rust_server_players gauge
+rust_server_players 3
+# TYPE rust_server_memory gauge
+rust_server_memory 123.5
+# TYPE rust_server_collections gauge
+rust_server_collections 42
+# TYPE rust_server_network_in gauge
+rust_server_network_in 100
+# TYPE rust_server_network_out gauge
+rust_server_network_out 200
 ```
 
 値や単位はサーバーの報告どおりで、メモリのバイト換算や通信速度の計算は行いません。
 `Collections` もサーバーが返す値をそのまま扱います。
-従来の `server_fps` などの個別名は、`rust_serverinfo{field="Framerate"}` などに統一しています。
+FPS の取得は Prometheus や Grafana のクエリ欄に `rust_server_fps` と入力します。
+旧形式の `rust_serverinfo{field="Framerate"}` などを使用している場合はクエリを変更してください。
+
+名前には英数字と `_` を使います。変換後の名前が重複する場合は `_2`、`_3` などで区別し、
+同じプロセスの稼働中は、項目が一時的に消えたり順序が変わったりしても名前を保持します。
 
 exporter 側では次の項目も出力します。
 
