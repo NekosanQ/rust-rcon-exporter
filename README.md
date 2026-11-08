@@ -2,6 +2,20 @@
 
 Rust サーバーの WebRCON から `serverinfo` を取得し、Prometheus のテキスト形式に
 変換して `/metrics` に出力します。本体は `main.py` 1 本です。
+実行時の Python 依存は `websocket-client` のみです。
+
+## 構成
+
+```text
+main.py               RCON 取得・変換・HTTP 出力
+requirements.txt      実行時の依存
+Dockerfile            実行用イメージ
+compose.yaml          コンテナの起動設定
+.env.example          接続設定の見本
+tests/test_main.py    動作確認用テスト
+requirements-dev.txt  テスト・コード確認用の依存
+.github/workflows/ci.yml  CI
+```
 
 ## 起動
 
@@ -64,7 +78,7 @@ docker compose down
 失敗時は古いゲーム統計を出力せず、設定した間隔で再接続します。
 WebSocket 接続は再利用し、HTTP は直近の取得結果を返します。
 
-Prometheus には同じホストから取得する設定を追加します。
+Prometheus には同じホストから取得する設定を追加します。設定例は以下のとおりです。
 
 ```yaml
 scrape_configs:
