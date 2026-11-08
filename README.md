@@ -1,7 +1,8 @@
 # rust-rcon-exporter
 
 Rust サーバーの WebRCON から `serverinfo` を取得し、Prometheus のテキスト形式に
-変換して `/metrics` に出力します。本体は `main.py` 1 本です。
+変換して `/metrics` に出力します。返された数値・真偽値の項目をすべて自動で出力します。
+本体は `main.py` 1 本です。
 実行時の Python 依存は `websocket-client` のみです。
 
 ## 構成
@@ -67,20 +68,37 @@ docker compose down
 
 ## 出力
 
-| メトリクス | `serverinfo` の項目 |
-| --- | --- |
-| `server_fps` | `Framerate` |
-| `players_online` | `Players` |
-| `entities_total` | `EntityCount` |
-| `players_queued` | `Queued` |
-| `players_joining` | `Joining` |
-| `players_capacity` | `MaxPlayers` |
-| `server_uptime_seconds` | `Uptime` |
+`serverinfo` の直下にある数値・真偽値を `rust_serverinfo{field="項目名"}` の Gauge として出力します。
+項目の固定リストはなく、サーバー側で数値項目が追加された場合も自動で出力します。
+真偽値は `true=1`、`false=0` に変換します。文字列・配列・オブジェクト・null・非有限数は出力しません。
 
-すべて現在値（Gauge）です。`Framerate`・`Players`・`EntityCount` は必須で、
-それ以外は取得できる項目だけを出力します。
-`rcon_up` は取得成功時に `1`、起動直後や失敗時に `0` です。
-失敗時は古いゲーム統計を出力せず、設定した間隔で再接続します。
+出力例（項目と値はサーバーによって異なります）:
+
+```prometheus
+# TYPE rust_serverinfo gauge
+rust_serverinfo{field="Framerate"} 60
+rust_serverinfo{field="Players"} 3
+rust_serverinfo{field="Memory"} 123.5
+rust_serverinfo{field="Collections"} 42
+rust_serverinfo{field="NetworkIn"} 100
+rust_serverinfo{field="NetworkOut"} 200
+```
+
+値や単位はサーバーの報告どおりで、メモリのバイト換算や通信速度の計算は行いません。
+`Collections` もサーバーが返す値をそのまま扱います。
+従来の `server_fps` などの個別名は、`rust_serverinfo{field="Framerate"}` などに統一しています。
+
+exporter 側では次の項目も出力します。
+
+| メトリクス | 内容 |
+| --- | --- |
+| `rcon_up` | 正常取得で `1`、起動直後・失敗後は `0` |
+| `rcon_response_seconds` | 正常なコマンドの送信から応答までの秒数。接続確立時間は含まない |
+| `rcon_last_success_timestamp_seconds` | 最後に正常取得した Unix 時刻。初回成功までは出力しない |
+| `rcon_poll_failures_total` | 接続・取得・解析の累積失敗回数（Counter）。exporter 再起動でリセット |
+
+数値項目が1つもない応答は取得失敗として扱います。失敗時は古いサーバーの値と応答時間を削除し、
+最終成功時刻と失敗回数を保持して、設定した間隔で再接続します。
 WebSocket 接続は再利用し、HTTP は直近の取得結果を返します。
 
 Prometheus には同じホストから取得する設定を追加します。設定例は以下のとおりです。
