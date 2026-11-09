@@ -108,7 +108,7 @@ exporter 側では次の項目も出力します。
 | `rcon_last_success_timestamp_seconds` | 最後に正常取得した Unix 時刻。初回成功までは出力しない |
 | `rcon_poll_failures_total` | 接続・取得・解析の累積失敗回数（Counter）。exporter 再起動でリセット |
 
-数値項目が1つもない応答は取得失敗として扱います。失敗時は古いサーバーの値と応答時間を削除し、
+数値・真偽値の項目が1つもない応答は取得失敗として扱います。失敗時は古いサーバーの値と応答時間を削除し、
 最終成功時刻と失敗回数を保持して、設定した間隔で再接続します。
 WebSocket 接続は再利用し、HTTP は直近の取得結果を返します。
 
@@ -131,11 +131,14 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-開発時の確認:
+開発時の確認（CI でも同じ静的チェック、テスト、イメージビルドを実行します）:
 
 ```sh
 python -m pip install -r requirements-dev.txt
+python -m ruff check --isolated .
+python -m ruff format --isolated --check .
 python -m unittest discover -s tests -v
+docker build .
 ```
 
 ## ライセンス
